@@ -3,32 +3,31 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-# MediaPipe의 그리기 유틸리티와 얼굴 메시 솔루션을 초기화합니다.
+# 그리기 유틸리티와 얼굴 메시 솔루션 초기화
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
 mp_face_mesh = mp.solutions.face_mesh
 
-# 입 상단과 하단의 랜드마크 인덱스 (MediaPipe FaceMesh 기준)
+# 입과 눈 랜드마크 인덱스
 UPPER_LIP = 13
 LOWER_LIP = 14
-# 각 눈의 랜드마크 인덱스 정의 (MediaPipe FaceMesh 기준)
 LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
 RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
-
 
 # 하품 감지를 위한 입 개방 임계값
 YAWN_THRESHOLD = 20  # 이 값은 실험을 통해 조정할 수 있습니다.
 # 졸음 감지를 위한 눈 개방 임계값
 EAR_THRESHOLD  = 0.21  # 이 값은 실험을 통해 조정할 수 있습니다.
 
+# 입 크기 계산
 def calculate_lip_distance(face_landmarks, image_shape):
-    """입 상단과 하단의 거리를 계산합니다."""
     upper_lip_point = np.array([face_landmarks.landmark[UPPER_LIP].x, face_landmarks.landmark[UPPER_LIP].y]) * [image_shape[1], image_shape[0]]
     lower_lip_point = np.array([face_landmarks.landmark[LOWER_LIP].x, face_landmarks.landmark[LOWER_LIP].y]) * [image_shape[1], image_shape[0]]
     distance = np.linalg.norm(upper_lip_point - lower_lip_point)
     return distance
+
+# 눈 크기 계산
 def eye_aspect_ratio(eye_points):
-    """눈의 EAR을 계산합니다."""
     # 세로 거리 계산
     V1 = np.linalg.norm(eye_points[1] - eye_points[5])
     V2 = np.linalg.norm(eye_points[2] - eye_points[4])
@@ -37,8 +36,9 @@ def eye_aspect_ratio(eye_points):
     # EAR 계산
     ear = (V1 + V2) / (2.0 * H)
     return ear
+
+# 랜드마크 좌표를 실제 이미지 상의 좌표로 변환합니다.
 def get_landmark_point(face_landmarks, landmark_index, image_shape):
-    """랜드마크 좌표를 실제 이미지 상의 좌표로 변환합니다."""
     landmark_point = np.array([face_landmarks.landmark[landmark_index].x, face_landmarks.landmark[landmark_index].y]) * [image_shape[1], image_shape[0]]
     return landmark_point
 
@@ -77,7 +77,10 @@ with mp_face_mesh.FaceMesh(
         # 얼굴 메시 결과가 있으면, 각 얼굴에 대해 메시를 그립니다.
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
+            # 상태 인식부
+                # 하품 거리
                 lip_distance = calculate_lip_distance(face_landmarks, image.shape)
+
                 # 눈 랜드마크 포인트 추출 및 EAR 계산
                 left_eye_points = np.array(
                     [get_landmark_point(face_landmarks, index, image.shape) for index in LEFT_EYE_INDICES])
@@ -87,23 +90,24 @@ with mp_face_mesh.FaceMesh(
                 right_EAR = eye_aspect_ratio(right_eye_points)
                 ear = (left_EAR + right_EAR) / 2.0
                 ear_text = f"EAR: {ear:.2f}"  # EAR 값을 문자열로 변환
+            # 상태 처리부
                 # 하품 감지
                 if lip_distance > YAWN_THRESHOLD:
                     yawn_status = "Yawn Detected!"
                 # EAR 기반 졸음 감지
-                if ear < EAR_THRESHOLD:
-                    sleep_status = "Sleepy"
-                else:
+                if ear > EAR_THRESHOLD:
                     sleep_status = "Awake"
-
+                else:
+                   sleep_status = "Sleepy"
+            # 이미지 처리부
                 # 얼굴의 메시, 윤곽, 눈동자 등을 그립니다.
-                # mp_drawing.draw_landmarks(
-                #     image=image,
-                #     landmark_list=face_landmarks,
-                #     connections=mp_face_mesh.FACEMESH_TESSELATION,
-                #     landmark_drawing_spec=None,
-                #     connection_drawing_spec=mp_drawing_styles
-                #     .get_default_face_mesh_tesselation_style())
+                mp_drawing.draw_landmarks(
+                    image=image,
+                    landmark_list=face_landmarks,
+                    connections=mp_face_mesh.FACEMESH_TESSELATION,
+                    landmark_drawing_spec=None,
+                    connection_drawing_spec=mp_drawing_styles
+                    .get_default_face_mesh_tesselation_style())
                 # 랜드마크 및 메시 그리기
                 mp_drawing.draw_landmarks(
                     image=image,
@@ -113,6 +117,7 @@ with mp_face_mesh.FaceMesh(
                     connection_drawing_spec=mp_drawing
                     .DrawingSpec(color=(0,255,0), thickness=1, circle_radius=1)
                 )
+
                 # mp_drawing.draw_landmarks(
                 #     image=image,
                 #     landmark_list=face_landmarks,
@@ -127,22 +132,21 @@ with mp_face_mesh.FaceMesh(
                 #     landmark_drawing_spec=None,
                 #     connection_drawing_spec=mp_drawing_styles
                 #     .get_default_face_mesh_iris_connections_style())
+
+
+    # 텍스트 및 이미지 출력부
         # 이미지를 좌우 반전합니다.
         flipped_image = cv2.flip(image, 1)
-
         # 하품 감지 상태를 좌우 반전된 영상에 표시
         cv2.putText(flipped_image, yawn_status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2,
             cv2.LINE_AA)
-
         # 졸음 감지 상태 표시
         cv2.putText(flipped_image, sleep_status, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2, cv2.LINE_AA)
-
         # 졸음 감지 상태 표시
         cv2.putText(flipped_image, ear_text, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2, cv2.LINE_AA)
-
         cv2.imshow('MediaPipe Face Mesh', flipped_image)
 
-        # ESC 키를 누르면 루프를 종료합니다.
+    # ESC 키를 누르면 루프를 종료합니다.
         if cv2.waitKey(5) & 0xFF == 27:
             break
 

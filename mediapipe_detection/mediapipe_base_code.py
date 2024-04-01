@@ -12,7 +12,7 @@ drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
 
 # 웹캠을 사용하기 위한 VideoCapture 객체를 생성합니다. 0은 기본 카메라를 의미합니다.
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-
+i = 0
 # FaceMesh 모델을 사용하는 부분입니다. 최대 얼굴 수, 랜드마크의 세부사항, 감지 및 추적의 신뢰도 설정이 포함됩니다.
 with mp_face_mesh.FaceMesh(
         max_num_faces=1,
@@ -21,6 +21,8 @@ with mp_face_mesh.FaceMesh(
         min_tracking_confidence=0.5) as face_mesh:
     # 웹캠이 열려있는 동안 반복합니다.
     while cap.isOpened():
+        print(i)
+        i+=1
         success, image = cap.read()
         if not success:
             print("웹캠을 찾을 수 없습니다.")
