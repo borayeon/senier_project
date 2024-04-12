@@ -22,7 +22,7 @@ if not face_cascade.load(cv2.samples.findFile(face_cascade_name)):
     exit(0)
 
 # Dlib 얼굴 랜드마크 예측기 로드
-predictor_file = 'Z:\Program Files\conda environment\git\senier_project\dlib_detection\shape_predictor_68_face_landmarks.dat'
+predictor_file = '/etc/dlib_detection/shape_predictor_68_face_landmarks.dat'
 predictor = dlib.shape_predictor(predictor_file)
 
 # 변수 설정

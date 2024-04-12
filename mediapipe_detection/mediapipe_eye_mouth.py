@@ -19,6 +19,8 @@ YAWN_THRESHOLD = 20  # 이 값은 실험을 통해 조정할 수 있습니다.
 # 졸음 감지를 위한 눈 개방 임계값
 EAR_THRESHOLD  = 0.21  # 이 값은 실험을 통해 조정할 수 있습니다.
 
+
+
 # 입 크기 계산
 def calculate_lip_distance(face_landmarks, image_shape):
     upper_lip_point = np.array([face_landmarks.landmark[UPPER_LIP].x, face_landmarks.landmark[UPPER_LIP].y]) * [image_shape[1], image_shape[0]]
@@ -78,9 +80,6 @@ with mp_face_mesh.FaceMesh(
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
             # 상태 인식부
-                # 하품 거리
-                lip_distance = calculate_lip_distance(face_landmarks, image.shape)
-
                 # 눈 랜드마크 포인트 추출 및 EAR 계산
                 left_eye_points = np.array(
                     [get_landmark_point(face_landmarks, index, image.shape) for index in LEFT_EYE_INDICES])
@@ -90,6 +89,8 @@ with mp_face_mesh.FaceMesh(
                 right_EAR = eye_aspect_ratio(right_eye_points)
                 ear = (left_EAR + right_EAR) / 2.0
                 ear_text = f"EAR: {ear:.2f}"  # EAR 값을 문자열로 변환
+                # 하품 거리
+                lip_distance = calculate_lip_distance(face_landmarks, image.shape)
             # 상태 처리부
                 # 하품 감지
                 if lip_distance > YAWN_THRESHOLD:
