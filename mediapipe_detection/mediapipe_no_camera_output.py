@@ -8,30 +8,60 @@ import time
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
 #
-
 # 얼굴 메시 솔루션 초기화
 mp_face_mesh = mp.solutions.face_mesh
 
-# 입과 눈 랜드마크 인덱스
-UPPER_LIP = 13
-LOWER_LIP = 14
-LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
-RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
+# 졸음 상태 변수
+class Status():
+    def __init__(self):
+        self.BlinkingDuration = False
+        self.BlinkingFrequency = False
+        self.Yawning = False
+        self.HeadDown = False
+status = Status()
 
-# 하품 감지를 위한 입 개방 임계값
-YAWN_THRESHOLD = 20  # 이 값은 실험을 통해 조정할 수 있습니다.
+# 얼굴 랜드마크 인덱스 변수
+class LandmarkIndex():
+    def __init__(self):
+        # 입과 눈 랜드마크 인덱스
+        self.UPPER_LIP = 13
+        self.LOWER_LIP = 14
+        self.LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
+        self.RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
+landmark = LandmarkIndex()
+
+# 임계치 변수
+class Threshold():
+    def __init__(self):
+        # 하품 감지를 위한 입 개방 임계값
+        self.YAWN_THRESHOLD = 20
+        # 졸음 감지를 위한 눈 개방 임계값
+        self.EAR_THRESHOLD = 0.21
+        # 졸음 감지를 위한 고개숙임 임계값
+        self.HEAD_THRESHOLD = 50
+        # 고개숙임
+        self.head_distance = 0
+threshold = Threshold()
+
+
+YAWN_THRESHOLD = 20
 # 졸음 감지를 위한 눈 개방 임계값
-EAR_THRESHOLD = 0.21  # 이 값은 실험을 통해 조정할 수 있습니다.
-# 졸음 감지를 위한 눈 개방 임계값
-HEAD_THRESHOLD = 50  # 이 값은 실험을 통해 조정할 수 있습니다.
+EAR_THRESHOLD = 0.21
+# 졸음 감지를 위한 고개숙임 임계값
+HEAD_THRESHOLD = 50
+# 고개숙임
 head_distance = 0
+
 # 전역 변수 초기화
 blink_count = 5
 start_time = time.time()
 
+
 # 눈 깜박임 감지를 위한 변수
 blink_timestamp = 0
 closing_durations = []  # 최근 10번의 눈 감김 지속 시간
+
+
 
 # perclos
 total_time = 0
@@ -43,20 +73,60 @@ eye_closed_timestamp = 0
 yawn_start_time = 0
 yawn_duration = 0
 
-drowsy = False
-status = False
-perclos = False
-head_down_count = False
-# 입 크기 계산
-def calculate_lip_distance(face_landmarks, image_shape):
-    upper_lip_point = np.array([face_landmarks.landmark[UPPER_LIP].x, face_landmarks.landmark[UPPER_LIP].y]) * [
-        image_shape[1], image_shape[0]]
-    lower_lip_point = np.array([face_landmarks.landmark[LOWER_LIP].x, face_landmarks.landmark[LOWER_LIP].y]) * [
-        image_shape[1], image_shape[0]]
-    distance = np.linalg.norm(upper_lip_point - lower_lip_point)
-    return distance
+drowsy_1 = False
+drowsy_2 = False
+drowsy_3 = False
+drowsy_4 = False
 
+#perclos = False
+#head_down_count = False
+
+### 개선 코드 작성 구간 1 - 하품
+def detect_yawning(face_landmarks, image_shape, yawn_start_time):
+    import numpy as np
+    import time
+
+    # 상입술과 하입술의 랜드마크 인덱스
+    UPPER_LIP = landmark.UPPER_LIP
+    LOWER_LIP = landmark.LOWER_LIP
+
+    yawn_threshold = threshold.YAWN_THRESHOLD
+
+    # 입 크기 계산
+    upper_lip_point = np.array([face_landmarks.landmark[UPPER_LIP].x, face_landmarks.landmark[UPPER_LIP].y]) * [image_shape[1], image_shape[0]]
+    lower_lip_point = np.array([face_landmarks.landmark[LOWER_LIP].x, face_landmarks.landmark[LOWER_LIP].y]) * [image_shape[1], image_shape[0]]
+    lip_distance = np.linalg.norm(upper_lip_point - lower_lip_point)
+
+    # 하품 상태
+    yawn_status = "No Yawn Detected"
+    yawn_duration = 0
+
+    # 하품 감지 및 지속 시간 처리
+    if lip_distance > yawn_threshold:
+        if yawn_start_time == 0:  # 하품이 시작된 시간이 기록되지 않았다면
+            yawn_start_time = time.time()  # 현재 시간을 하품 시작 시간으로 기록
+        else:
+            yawn_duration = time.time() - yawn_start_time  # 하품 지속 시간 계산
+            if yawn_duration >= 2:  # 하품이 3초 이상 지속되었다면
+                yawn_status = "Yawn Detected!"
+    else:
+        yawn_start_time = 0  # 하품이 감지되지 않으면 시작 시간을 리셋
+        yawn_duration = 0  # 지속 시간도 리셋
+
+    return yawn_status , yawn_duration, yawn_start_time
+# 입 크기 계산
+# def calculate_lip_distance(face_landmarks, image_shape):
+#     upper_lip_point = np.array([face_landmarks.landmark[landmark.UPPER_LIP].x, face_landmarks.landmark[landmark.UPPER_LIP].y]) * [
+#         image_shape[1], image_shape[0]]
+#     lower_lip_point = np.array([face_landmarks.landmark[landmark.LOWER_LIP].x, face_landmarks.landmark[landmark.LOWER_LIP].y]) * [
+#         image_shape[1], image_shape[0]]
+#     distance = np.linalg.norm(upper_lip_point - lower_lip_point)
+#     return distance
+###
+### 개선 코드 작성 구간 2 - 눈 깜빡임 지속시간
 # 눈 크기 계산
+
+#
 def eye_aspect_ratio(eye_points):
     V1 = np.linalg.norm(eye_points[1] - eye_points[5])
     V2 = np.linalg.norm(eye_points[2] - eye_points[4])
@@ -65,13 +135,17 @@ def eye_aspect_ratio(eye_points):
     return ear
 
 def EAR_calculation(face_landmarks, image_shape):
-    left_eye_points = np.array([np.array([face_landmarks.landmark[index].x, face_landmarks.landmark[index].y]) * [image_shape[1], image_shape[0]] for index in LEFT_EYE_INDICES])
-    right_eye_points = np.array([np.array([face_landmarks.landmark[index].x, face_landmarks.landmark[index].y]) * [image_shape[1], image_shape[0]] for index in RIGHT_EYE_INDICES])
+    left_eye_points = np.array([np.array([face_landmarks.landmark[index].x, face_landmarks.landmark[index].y]) * [image_shape[1], image_shape[0]] for index in landmark.LEFT_EYE_INDICES])
+    right_eye_points = np.array([np.array([face_landmarks.landmark[index].x, face_landmarks.landmark[index].y]) * [image_shape[1], image_shape[0]] for index in landmark.RIGHT_EYE_INDICES])
     return (eye_aspect_ratio(left_eye_points) + eye_aspect_ratio(right_eye_points)) / 2.0
 
+
+# 500ms 이상 눈 감은 횟수가 3회 이상인지 확인
+def check_drowsiness():
+    return len([d for d in closing_durations if d >= 0.5]) >= 3
 # 눈 지속 시간 계산
 def calculate_eye_closing_time(ear, current_time):
-    global blink_timestamp, closing_durations
+    global blink_timestamp, closing_durations, blink_count
     # 눈의 개방 정도(ear)가 임계값(EAR_THRESHOLD)보다 작고, 눈을 감기 시작한 시간이 기록되지 않았다면
     if ear < EAR_THRESHOLD and blink_timestamp == 0:
         blink_timestamp = current_time  # 현재 시간을 눈 감기 시작 시간으로 설정
@@ -84,17 +158,15 @@ def calculate_eye_closing_time(ear, current_time):
             closing_durations.pop(0)  # 리스트의 크기를 10으로 유지하기 위해 가장 오래된 기록 삭제
         closing_durations.append(duration)  # 새로운 눈 감김 지속 시간을 리스트에 추가
         blink_timestamp = 0  # 눈 감기 시작 시간 초기화
-        return True  # 눈 깜박임이 완료됐음을 나타내는 True 반환
+        blink_count += 1 # 눈 깜박임 카운트 증가
+        return check_drowsiness()  # 눈 깜박임이 3회 이상이면 true 반환
 
     return False  # 눈 깜박임이 감지되지 않았다면 False 반환
 
-# 500ms 이상 눈 감은 횟수가 3회 이상인지 확인
-def check_drowsiness():
-    return len([d for d in closing_durations if d >= 0.5]) >= 3
-
 # 분당 눈 깜박임 횟수 계산
-def calculate_blink_count_and_rate(current_time):
-    global blink_count, start_time
+def calculate_blink_count_and_rate():
+    global blink_count, start_time, drowsy_2
+    current_time = time.time()
     elapsed_time = current_time - start_time
 
     if elapsed_time >= 60:
@@ -102,16 +174,20 @@ def calculate_blink_count_and_rate(current_time):
         blink_count = 0  # 카운터 리셋
         start_time = current_time  # 시간 리셋
         if 15 <= blink_rate <= 20:
+            drowsy_2 = False
             return False
         elif blink_rate < 5 or blink_rate > 20:
+            drowsy_2 = True
             return True
         else:
+            drowsy_2 = False
             return False
 
     return False
 # perclos 20% 계산
-def update_eye_closure(ear, current_time):
+def update_eye_closure(ear):
     global eye_closed_timestamp, closed_eye_time, start_measurement_time, total_time
+    current_time = time.time()
     if ear < EAR_THRESHOLD:
         if eye_closed_timestamp == 0:  # 눈이 감기 시작했을 때
             eye_closed_timestamp = current_time
@@ -120,14 +196,18 @@ def update_eye_closure(ear, current_time):
             closed_eye_time += current_time - eye_closed_timestamp
             eye_closed_timestamp = 0
 
-def calculate_perclos(current_time):
-    global start_measurement_time, total_time, closed_eye_time
+def calculate_perclos():
+    global start_measurement_time, total_time, closed_eye_time, drowsy_3
+    current_time = time.time()
     if current_time - start_measurement_time >= 5:  # 60초마다 PERCLOS 계산
         total_time = current_time - start_measurement_time
         perclos = (closed_eye_time / total_time) * 100
         start_measurement_time = current_time  # 측정 시간 리셋
         closed_eye_time = 0  # 닫힌 눈의 시간 리셋
-        return perclos < 20  # PERCLOS가 20% 미만인지 확인
+        if perclos < 20:
+            drowsy_3 = True  # PERCLOS가 20% 미만인지 확인
+        else:
+            drowsy_3 = False
     return False  # 아직 60초가 지나지 않았다면 False 반환
 
 # 고개 숙임
@@ -193,51 +273,35 @@ with mp_face_mesh.FaceMesh(
         # 이미지에서 얼굴 메시를 처리하고 상태를 분석하는 부분은 유지됩니다.
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
+#----------------------------------------------------------------------------------------
+                # # 하품
+                # # 입 크기 계산 - 실시간 업데이트
+                yawn_status, yawn_start_time, yawn_duration = detect_yawning(face_landmarks, image.shape, yawn_start_time)
+#----------------------------------------------------------------------------------------
+                # 눈 깜빡임 지속시간 - 실시간 업데이트
                 # ear 계산
                 ear = EAR_calculation(face_landmarks, image.shape)
-
-                # 하품 여부 확인
-                # 입 크기 계산
-                lip_distance = calculate_lip_distance(face_landmarks, image.shape)
-
-                blinked = calculate_eye_closing_time(ear, time.time())
-                # 눈 감김 지속 시간
-                if blinked:
-                    # 눈 감김 지속 시간이 500ms을 넘으면 피곤 출력
-                    drowsy = check_drowsiness()
-
-                    # if drowsy:
-                    #     print("Drowsiness detected!")
-
-                # 눈 깜박임 빈도수
-                if blinked:
-                    blink_count += 1  # 눈 깜박임 카운트 증가
-                status = calculate_blink_count_and_rate(time.time())
-                #if status != "계산 중":
-                #    print(status)
-
+                # 눈 깜빡임 시 눈 감김 지속 시간이 500ms을 넘으면 상태 True로 변환
+                drowsy_1 = calculate_eye_closing_time(ear, time.time())
+#----------------------------------------------------------------------------------------
+                # 눈 깜박임 분당 빈도수 - 1분마다 업데이트
+                _ = calculate_blink_count_and_rate()
+#----------------------------------------------------------------------------------------
                 # perclos
                 # 눈 상태 업데이트
-                update_eye_closure(ear, time.time())  # 현재 EAR 값과 현재 시간 전달
-                perclos = calculate_perclos(time.time())
+                update_eye_closure(ear)  # 현재 EAR 값과 현재 시간 전달
+                # 1분마다 업데이트
+                _ = calculate_perclos()
+#----------------------------------------------------------------------------------------
                 # 고개 숙임
-                head_down_count = detect_head_down(face_landmarks, image.shape)
+                #head_down_count = detect_head_down(face_landmarks, image.shape)
 
                 # 상태 처리 로직 (예: 하품 감지, 졸음 상태 감지 등)은 여기에 포함됩니다.
                 # 하지만 결과를 화면에 표시하는 부분은 제거됩니다.
 # 4
                 # 상태 처리부
                 # 상태 업데이트 로직
-                if lip_distance > YAWN_THRESHOLD:
-                    if yawn_start_time == 0:  # 하품이 시작된 시간이 기록되지 않았다면
-                        yawn_start_time = time.time()  # 현재 시간을 하품 시작 시간으로 기록
-                    else:
-                        yawn_duration = time.time() - yawn_start_time  # 하품 지속 시간 계산
-                        if yawn_duration >= 3:  # 하품이 3초 이상 지속되었다면
-                            yawn_status = "Yawn Detected!"
-                else:
-                    yawn_start_time = 0  # 하품이 감지되지 않으면 시작 시간을 리셋
-                    yawn_duration = 0  # 지속 시간도 리셋
+
                 # EAR 기반 졸음 감지
                 if ear > EAR_THRESHOLD:
                     sleep_status = "Awake"
