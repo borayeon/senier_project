@@ -83,7 +83,7 @@ class DrowsinessDetector:
         upper_lip_point = np.array([face_landmarks.landmark[landmark.UPPER_LIP].x, face_landmarks.landmark[landmark.UPPER_LIP].y]) * [image_shape[1], image_shape[0]]
         lower_lip_point = np.array([face_landmarks.landmark[landmark.LOWER_LIP].x, face_landmarks.landmark[landmark.LOWER_LIP].y]) * [image_shape[1], image_shape[0]]
         lip_distance = np.linalg.norm(upper_lip_point - lower_lip_point)
-        print(lip_distance)
+        #print(lip_distance)
         # 하품 감지 및 지속 시간 처리
         if lip_distance > yawn_threshold:
             if self.yawn_start_time == 0:  # 하품이 시작된 시간이 기록되지 않았다면
