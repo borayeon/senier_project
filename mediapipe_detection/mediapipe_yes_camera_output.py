@@ -12,10 +12,10 @@ mp_face_mesh = mp.solutions.face_mesh
 # 졸음 상태 변수
 class Status():
     def __init__(self):
-        self.drowsy_0 = False
-        self.drowsy_1 = False
-        self.drowsy_2 = False
-        self.drowsy_3 = False
+        self.drowsy_0 = False # 하품(입벌림 3초 이상)
+        self.drowsy_1 = False # 눈 깜빡임 지속 시간(이 500ms 이상이 10번중 3회이상) 졸음 
+        self.drowsy_2 = False # 분당 눈 깜빡임 횟수(가 5회 미만 or 20회 이상) 졸음
+        self.drowsy_3 = False # 분당 눈 감은 시간(20퍼센트 미만) 졸음
         #self.HeadDown = False
     def __str__(self):
         return f"하품 : {self.drowsy_0}, drowsy_2 : {self.drowsy_1}, drowsy_2: {self.drowsy_2}, drowsy_3: {self.drowsy_3}"
