@@ -72,6 +72,7 @@ class CO2Sensor:
             return 1.0
 
     def co2_check(self):
+        global drowsy_weight
         self.ser.setup()
         print("Sending")
         self.send_cmd()
@@ -105,10 +106,10 @@ class CO2Sensor:
             #print("PPM:", PPM_Value, "가중치:", self.weight)
             # 이전 레벨 저장
             self.pre_level = self.level
-            return [self.level, self.weight]
+            drowsy_weight[0] = [self.level, self.weight]
         else:
             #print("CHECKSUM Error 이전 레벨로 입력됩니다.")
-            return [self.level, self.weight]
+            drowsy_weight[0] = [self.level, self.weight]
 
     # CO2 상태를 지속적으로 확인하는 루프
     def run(self):
@@ -138,8 +139,8 @@ INITIAL_EYE_FRAME_THRESHOLD = 9
 INITIAL_MOUTH_FRAME_THRESHOLD = 15
 FRAME_RATE = 15  # FPS 기준값
 # 졸음 상태 저장용 배열 (하품, 눈 깜빡임 지속 시간, 분당 눈 깜빡임 횟수, 분당 눈 감은 시간)
-drowsy = [None, None, None, None]  # 하품(가중치 : 1 or 0), 눈 깜빡임 지속시간, 분당 눈 깜빡임 횟수, 분당 눈 감은 시간
-previous_state = drowsy.copy()
+drowsy_weight = [None, None, None, None, None]  # CO2(가중치) 하품(가중치 : 1 or 0), 눈 깜빡임 지속시간(가중치), 분당 눈 깜빡임 횟수, 분당 눈 감은 시간
+#previous_state = drowsy_weight.copy()
 # 시리얼 통신을 통한 데이터 수신
 received_int = None
 
@@ -458,7 +459,7 @@ def main():
     picam2 = Picamera2()
     picam2.start()
     time.sleep(2.0)
-    print(drowsy)
+    print(drowsy_weight)
     # MediaPipe 얼굴 메쉬 감지 설정
     with mp_face_mesh.FaceMesh(
             max_num_faces=1,
@@ -481,22 +482,25 @@ def main():
                     # ----------------------------------------------------------------------------------------
                     # 하품
                     # 입 크기 계산 - 실시간 업데이트
-                    drowsy[0] = detector.detect_yawning(face_landmarks, image.shape)
+                    drowsy_weight[1] = detector.detect_yawning(face_landmarks, image.shape)
                     # ----------------------------------------------------------------------------------------
                     # 눈 깜빡임 지속시간 - 실시간 업데이트
                     # ear 계산
                     ear = detector.EAR_calculation(face_landmarks, image.shape)
                     # 눈 깜빡임 시 눈 감김 지속 시간이 500ms을 넘으면 상태 True로 변환
-                    drowsy[1] = detector.calculate_eye_closing_time(ear)
+                    drowsy_weight[2] = detector.calculate_eye_closing_time(ear)
                     # ----------------------------------------------------------------------------------------
+
+
+
                     # 눈 깜박임 분당 빈도수 - 1분마다 업데이트
-                    drowsy[2] = detector.calculate_blink_count_and_rate()
+                    drowsy_weight[3] = detector.calculate_blink_count_and_rate()
                     # ----------------------------------------------------------------------------------------
                     # perclos
                     # 눈 상태 업데이트
                     detector.update_eye_closure(ear)  # 현재 EAR 값과 현재 시간 전달
                     # 1분마다 업데이트
-                    drowsy[3] = detector.calculate_perclos()
+                    drowsy_weight[4] = detector.calculate_perclos()
                     # ----------------------------------------------------------------------------------------
                     mp_drawing.draw_landmarks(
                         image=image,
