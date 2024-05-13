@@ -45,13 +45,13 @@ class CO2Sensor:
             return 1  # 평범
         elif 1000 < ppm <= 2500:
             # 2단계
-            return 2  # 주의 - 환기or 외기순환 제안
+            return 2  # 주의 - 환기 or 외기순환 제안
         elif 2500 < ppm <= 3000:
             # 3단계
-            return 3  # 피로 유발 - 환기or 외기순환 제안
+            return 3  # 피로 유발 - 환기 or 외기순환 제안
         else:
             # 4단계
-            return 4  # 위험 - 환기or 외기순환 제안
+            return 4  # 위험 - 환기 or 외기순환 제안
 
     def co2_weight(self):
         if self.level == 0:
@@ -138,7 +138,7 @@ INITIAL_EYE_FRAME_THRESHOLD = 9
 INITIAL_MOUTH_FRAME_THRESHOLD = 15
 FRAME_RATE = 15  # FPS 기준값
 # 졸음 상태 저장용 배열 (하품, 눈 깜빡임 지속 시간, 분당 눈 깜빡임 횟수, 분당 눈 감은 시간)
-drowsy = [False, False, False, False]  # 하품, 눈 깜빡임 지속시간, 분당 눈 깜빡임 횟수, 분당 눈 감은 시간
+drowsy = [None, None, None, None]  # 하품(가중치 : 1 or 0), 눈 깜빡임 지속시간, 분당 눈 깜빡임 횟수, 분당 눈 감은 시간
 previous_state = drowsy.copy()
 # 시리얼 통신을 통한 데이터 수신
 received_int = None
@@ -176,6 +176,13 @@ class DrowsinessDetector:
         self.closed_eye_time = 0
         self.start_measurement_time = time.time()
         self.eye_closed_timestamp = 0
+        # 하품
+        self.yawn_start_time = 0  # 시작시간
+        self.yawn_duration = 0  # 기간
+        self.yawn_count = 0  # 횟수
+        self.stage = 0  # 상태
+        self.stage_start_time = time.time()  # 시간
+        self.weight_yawming = 0
 
     ## 하품 - 태경
     def detect_yawning(self, face_landmarks, image_shape):
@@ -195,14 +202,62 @@ class DrowsinessDetector:
             else:
                 self.yawn_duration = time.time() - self.yawn_start_time  # 하품 지속 시간 계산
                 if self.yawn_duration >= 2.5:  # 하품이 3초 이상 지속되었다면
-                    # text_status.drowsy0_status = "Yawn Detected"
-                    return True
+                    if self.yawn_duration >= 2.5:  # 하품이 2.5초 이상 지속되었다면
+                        self.yawn_count += 1
+                        self.weight_yawming = self.yawning_update_stage()  # 0, 1
+                        self.yawn_start_time = 0
+                        self.yawn_duration = 0
+                        return self.weight_yawming
         else:
             # 하품이 감지되지 않으면 시작 시간과 지속 시간 리셋
             self.yawn_start_time = 0
             self.yawn_duration = 0
-            return False
-        return False
+
+        return self.weight_yawming
+    # 하품 레벨
+    def yawning_update_stage(self):
+        current_time = time.time()  # 실시간
+        elapsed_time = current_time - self.stage_start_time  ## 단계 시작 시간
+        old_stage = self.stage
+
+        if self.stage == 0 and self.yawn_count >= 1:
+            self.stage = 1
+        elif self.stage == 1 and elapsed_time >= 300:  # 1단계 : 5분간 지속
+            if self.yawn_count == 0:  # 5분간 0회 시 0단계 격하
+                self.stage = 0
+            elif self.yawn_count == 1:  # 5분간 1회 시 1단계 유지
+                self.stage = 1
+            elif self.yawn_count == 2:  # 5분간 2회 시 2단계 격상
+                self.stage = 2
+            elif self.yawn_count >= 3:  # 5분간 3회 시 3단계 격상
+                self.stage = 3
+        elif self.stage == 2 and elapsed_time >= 900:  # 2단계 : 15분간 지속
+            if self.yawn_count <= 1:
+                self.stage = 1
+            elif self.yawn_count == 2:
+                self.stage = 2
+            elif self.yawn_count >= 3:
+                self.stage = 3
+        elif self.stage == 3 and elapsed_time >= 1800:  # 3단계 : 30분간 지속
+            if self.yawn_count <= 1:
+                self.stage = 1
+            elif self.yawn_count == 2:
+                self.stage = 2
+            elif self.yawn_count >= 3:
+                self.stage = 3
+
+        if old_stage != self.stage:  # 단계가 변경된 경우
+            self.stage_start_time = current_time
+            self.yawn_count = 0  # 단계가 변경되면 하품 횟수 초기화
+            if self.stage != 0:
+                return 1  # 단계가 0이 아닐 때 가중치 1 반환
+            else:
+                return 0  # 단계가 0일 때 0 반환
+        else:  # 변경이 되지 않았다면
+            if self.stage != 0:
+                return 1  # 단계가 0이 아닐 때 가중치 1 반환
+            else:
+                return 0  # 단계가 0일 때 0 반환
 
     # 눈의 EAR 계산 함수 - 태경
     def eye_aspect_ratio(self, eye_points):
