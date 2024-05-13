@@ -183,6 +183,8 @@ class DrowsinessDetector:
         self.stage = 0  # 상태
         self.stage_start_time = time.time()  # 시간
         self.weight_yawming = 0
+        # 지속시간
+        self.weight_eye_close_time = 0
 
     ## 하품 - 태경
     def detect_yawning(self, face_landmarks, image_shape):
@@ -214,7 +216,7 @@ class DrowsinessDetector:
             self.yawn_duration = 0
 
         return self.weight_yawming
-    # 하품 레벨
+    # 하품 가중치
     def yawning_update_stage(self):
         current_time = time.time()  # 실시간
         elapsed_time = current_time - self.stage_start_time  ## 단계 시작 시간
@@ -282,7 +284,30 @@ class DrowsinessDetector:
 
     # 500ms 이상 눈 감은 횟수로 졸음 확인 - 태경
     def check_drowsiness_(self):
-        return len([d for d in self.closing_durations if d >= 0.5]) >= 3
+        drowsy_count = len([d for d in self.closing_durations if d >= 0.5])
+        weight = self.calculate_weight(drowsy_count)
+        return weight
+
+    def calculate_weight(self, drowsy_count):
+        # 횟수에 따른 기본 가중치 설정
+        if drowsy_count == 0:
+            base_weight = 0
+        elif drowsy_count == 1:
+            base_weight = 0.1
+        elif drowsy_count == 2:
+            base_weight = 0.3
+        elif drowsy_count >= 3:
+            base_weight = 0.6
+
+        # 횟수에 따른 추가 가중치 설정
+        if drowsy_count < 3:
+            additional_weight = 0
+        elif drowsy_count < 5:
+            additional_weight = 0.2
+        else:
+            additional_weight = 0.3
+
+        return base_weight + additional_weight
 
     # 눈 지속 시간 계산 - 태경
     def calculate_eye_closing_time(self, ear):
@@ -290,19 +315,19 @@ class DrowsinessDetector:
         # 눈의 개방 정도(ear)가 임계값(EAR_THRESHOLD)보다 작고, 눈을 감기 시작한 시간이 기록되지 않았다면
         if ear < EAR_THRESHOLD and self.blink_timestamp == 0:
             self.blink_timestamp = current_time  # 현재 시간을 눈 감기 시작 시간으로 설정
-            return False  # 눈이 아직 완전히 감기지 않았음을 나타내는 False 반환
+            return 0  # 눈이 아직 완전히 감기지 않았음을 나타내는 0 반환
 
         # 눈의 개방 정도가 임계값 이상이고, 눈을 감기 시작한 시간이 기록되어 있다면 (즉, 눈이 다시 열렸다면)
         elif ear >= EAR_THRESHOLD and self.blink_timestamp != 0:
             duration = current_time - self.blink_timestamp  # 눈을 감고 있던 총 시간 계산
-            if len(self.closing_durations) >= 10:
-                self.closing_durations.pop(0)  # 리스트의 크기를 10으로 유지하기 위해 가장 오래된 기록 삭제
+            if len(self.closing_durations) >= 15:
+                self.closing_durations.pop(0)  # 리스트의 크기를 15으로 유지하기 위해 가장 오래된 기록 삭제
             self.closing_durations.append(duration)  # 새로운 눈 감김 지속 시간을 리스트에 추가
             self.blink_timestamp = 0  # 눈 감기 시작 시간 초기화
             self.blink_count += 1  # 눈 깜박임 카운트 증가
             return self.check_drowsiness_()  # 눈 깜박임이 3회 이상이면 true 반환
 
-        return False  # 눈 깜박임이 감지되지 않았다면 False 반환
+        return 0  # 눈 깜박임이 감지되지 않았다면 0 반환
 
     # 분당 눈 깜박임 횟수 계산 - 태경
     def calculate_blink_count_and_rate(self):
