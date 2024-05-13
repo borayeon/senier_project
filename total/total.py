@@ -7,15 +7,15 @@ import time
 from picamera2 import Picamera2
 import serial
 
-# co2 데이터 수집
-received_co2 = None
 
 # 0 : 좋음, 1 : 평범, 2 : 주의, 3 : 피로유발, 4 : 위험 - 태경
 class CO2Sensor:
     def __init__(self, port='/dev/ttyAMA0', baudrate=9600):
         self.ser = serial.Serial(port, baudrate)
         self.receive_buff = [0] * 8
-
+        self.level = 0  # 레벨 유지
+        self.pre_level = 0
+        self.weight = 0
     # 초기화 작업
     def setup(self):
         self.ser.flushInput()
@@ -37,19 +37,41 @@ class CO2Sensor:
 
     # ppm 값에 따라 CO2 상태 분류
     def co2_level(self, ppm):
-        if ppm <= 400:
+        if ppm <= 1000:
+            # 0단계
             return 0  # 좋음
-        elif ppm <= 1000:
+        elif ppm <= 2000:
+            # 1단계
             return 1  # 평범
-        elif 1000 < ppm <= 2000:
-            return 2  # 주의
-        elif 2000 < ppm <= 5000:
-            return 3  # 피로 유발
+        elif 1000 < ppm <= 2500:
+            # 2단계
+            return 2  # 주의 - 환기or 외기순환 제안
+        elif 2500 < ppm <= 3000:
+            # 3단계
+            return 3  # 피로 유발 - 환기or 외기순환 제안
         else:
-            return 4  # 위험
+            # 4단계
+            return 4  # 위험 - 환기or 외기순환 제안
+
+    def co2_weight(self):
+        if self.level == 0:
+            # 0단계
+            self.level = 0
+            return 0  
+        elif self.level == 1:
+            # 1단계
+            return 0.3  
+        elif self.level == 2:
+            # 2단계
+            return 0.5  
+        elif self.level == 3:
+            # 3단계
+            return 0.8 
+        elif self.level <= 4:
+            # 4단계
+            return 1.0
 
     def co2_check(self):
-        global received_co2
         self.ser.setup()
         print("Sending")
         self.send_cmd()
@@ -65,18 +87,35 @@ class CO2Sensor:
         # 수신된 데이터의 체크섬 검사
         if self.checksum_cal() == self.receive_buff[7]:
             PPM_Value = (self.receive_buff[3] << 8) | self.receive_buff[4]
-            received_co2 = self.co2_level(PPM_Value)
-            print("PPM:", PPM_Value, " 상태:", received_co2)
-            return received_co2
+            # 레벨 반환
+            self.level = self.co2_level(PPM_Value)  # 0,1,2,3,4
+            # 이전 레벨 < 현재 ppm -> 이전레벨 + 1
+            if self.pre_level < self.level:
+                self.level = self.pre_level + 1
+            # 이전 레벨 > 현재 ppm -> 현재 ppm
+            #elif self.pre_level > self.level:
+            #    pass
+                #self.level = self.level
+            # 이전 레벨 == 현재 ppm -> 이전 레벨
+            #elif self.pre_level == self.level:
+            #    pass
+                #self.level = self.pre_level
+            # 가중치 반환
+            self.weight = self.co2_weight()
+            #print("PPM:", PPM_Value, "가중치:", self.weight)
+            # 이전 레벨 저장
+            self.pre_level = self.level
+            return [self.level, self.weight]
         else:
-            print("CHECKSUM Error")
-            received_co2 = -1
-            return received_co2
+            #print("CHECKSUM Error 이전 레벨로 입력됩니다.")
+            return [self.level, self.weight]
 
     # CO2 상태를 지속적으로 확인하는 루프
     def run(self):
+        time.sleep(900) # 15분 뒤부터 코드 동작
         while True:
             self.co2_check()
+            time.sleep(600) # 10분마다 코드 동작
 
 # Serial port settings
 ser = serial.Serial('/dev/ttyAMA4', baudrate=9600, timeout=1)
@@ -248,7 +287,7 @@ class DrowsinessDetector:
             self.start_measurement_time = current_time
             self.closed_eye_time = 0
             # PERCLOS가 20% 미만인지 확인하여 상태 반환
-            return perclos < 20
+            return perclos > 20
         return False  # 아직 60초가 지나지 않았다면 False 반환
 
     # 눈 깜빡임 횟수를 확인하는 함수 - 태경
