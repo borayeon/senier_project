@@ -173,7 +173,7 @@ class DrowsinessDetector:
         self.eye_frame_threshold = INITIAL_EYE_FRAME_THRESHOLD
         self.mouth_frame_threshold = INITIAL_MOUTH_FRAME_THRESHOLD
         self.last_blink_timestamp = 0
-        self.blinks_per_minute = 0
+        self.blinks_per_minute = []
         self.closed_eye_time = 0
         self.start_measurement_time = time.time()
         self.eye_closed_timestamp = 0
@@ -186,7 +186,10 @@ class DrowsinessDetector:
         self.weight_yawming = 0
         # 지속시간
         self.weight_eye_close_time = 0
-
+        # 횟수
+        self.weight_blink_count = 0
+        # 퍼클로스
+        self.weight_perclos= 0
     ## 하품 - 태경
     def detect_yawning(self, face_landmarks, image_shape):
         # 입 크기 계산
@@ -290,6 +293,7 @@ class DrowsinessDetector:
         return weight
 
     def calculate_weight(self, drowsy_count):
+        base_weight = None
         # 횟수에 따른 기본 가중치 설정
         if drowsy_count == 0:
             base_weight = 0
@@ -308,7 +312,8 @@ class DrowsinessDetector:
         else:
             additional_weight = 0.3
 
-        return base_weight + additional_weight
+        self.weight_eye_close_time = base_weight + additional_weight
+        return self.weight_eye_close_time
 
     # 눈 지속 시간 계산 - 태경
     def calculate_eye_closing_time(self, ear):
@@ -327,23 +332,34 @@ class DrowsinessDetector:
             self.blink_timestamp = 0  # 눈 감기 시작 시간 초기화
             self.blink_count += 1  # 눈 깜박임 카운트 증가
             return self.check_drowsiness_()  # 눈 깜박임이 3회 이상이면 true 반환
-
         return 0  # 눈 깜박임이 감지되지 않았다면 0 반환
 
     # 분당 눈 깜박임 횟수 계산 - 태경
     def calculate_blink_count_and_rate(self):
         current_time = time.time()
         elapsed_time = current_time - self.start_time
+
         if elapsed_time >= 60:
-            blink_rate = self.blink_count  # 분당 깜박임 수
+            self.blinks_per_minute.append(self.blink_count)  # 최근 1분간 깜박임 수를 리스트에 추가
             self.blink_count = 0  # 카운터 리셋
             self.start_time = current_time  # 시간 리셋
-            if 15 <= blink_rate <= 20:  # 안 피곤
-                return False
-            elif blink_rate < 5 or blink_rate > 20:  # 피곤
-                return True
-        return False
-
+            if len(self.blinks_per_minute) > 5:  # 최근 5분 기록만 유지
+                self.blinks_per_minute.pop(0)
+            # 최근 5분간 총 깜박임 횟수 계산
+            total_blinks = sum(self.blinks_per_minute)
+            # 가중치 계산
+            if total_blinks == 0:
+                self.weight_blink_count = 0
+                return self.weight_blink_count
+            elif total_blinks == 1:
+                self.weight_blink_count = 0.5
+                return self.weight_blink_count
+            elif total_blinks == 2:
+                self.weight_blink_count = 0.8
+                return self.weight_blink_count
+            elif total_blinks >= 3:
+                self.weight_blink_count = 1.0
+                return self.weight_blink_count
     # 눈 깜빡임 상태를 업데이트하는 함수 - 태경
     def update_eye_closure(self, ear):
         current_time = time.time()
@@ -368,26 +384,33 @@ class DrowsinessDetector:
             self.start_measurement_time = current_time
             self.closed_eye_time = 0
             # PERCLOS가 20% 미만인지 확인하여 상태 반환
-            return perclos > 20
-        return False  # 아직 60초가 지나지 않았다면 False 반환
+            if perclos < 20:
+                self.weight_perclos = 0
+            elif perclos < 30:
+                self.weight_perclos = 0.6
+            elif perclos < 40:
+                self.weight_perclos = 1.0
+            elif perclos < 50:
+                self.weight_perclos = 2.0
+        return self.weight_perclos  # 60초가 지나지 않았다면 이전 상태 반환
 
-    # 눈 깜빡임 횟수를 확인하는 함수 - 태경
-    def check_blink(self, ear):
-        current_time = time.time()
-        # EAR 값이 임계값보다 작고 마지막 깜빡임 타임스탬프가 없을 때 깜빡임 시작
-        if ear < EAR_THRESHOLD and self.last_blink_timestamp == 0:
-            self.last_blink_timestamp = current_time
-        # EAR 값이 임계값 이상이고 마지막 깜빡임 타임스탬프가 있을 때 깜빡임 종료
-        elif ear >= EAR_THRESHOLD and self.last_blink_timestamp != 0:
-            self.blink_count += 1
-            self.last_blink_timestamp = 0
-
-        # 1분마다 깜빡임 횟수를 초기화하고 갱신
-        if current_time - self.start_time > BLINK_RESET_TIME:
-            self.blinks_per_minute = self.blink_count
-            self.blink_count = 0
-            self.start_time = current_time
-        return self.blinks_per_minute
+    # # 눈 깜빡임 횟수를 확인하는 함수
+    # def check_blink(self, ear):
+    #     current_time = time.time()
+    #     # EAR 값이 임계값보다 작고 마지막 깜빡임 타임스탬프가 없을 때 깜빡임 시작
+    #     if ear < EAR_THRESHOLD and self.last_blink_timestamp == 0:
+    #         self.last_blink_timestamp = current_time
+    #     # EAR 값이 임계값 이상이고 마지막 깜빡임 타임스탬프가 있을 때 깜빡임 종료
+    #     elif ear >= EAR_THRESHOLD and self.last_blink_timestamp != 0:
+    #         self.blink_count += 1
+    #         self.last_blink_timestamp = 0
+    #
+    #     # 1분마다 깜빡임 횟수를 초기화하고 갱신
+    #     if current_time - self.start_time > BLINK_RESET_TIME:
+    #         self.blinks_per_minute = self.blink_count
+    #         self.blink_count = 0
+    #         self.start_time = current_time
+    #     return self.blinks_per_minute
 
     # 사용하지 않는? 코드
     # # 동재
@@ -490,9 +513,6 @@ def main():
                     # 눈 깜빡임 시 눈 감김 지속 시간이 500ms을 넘으면 상태 True로 변환
                     drowsy_weight[2] = detector.calculate_eye_closing_time(ear)
                     # ----------------------------------------------------------------------------------------
-
-
-
                     # 눈 깜박임 분당 빈도수 - 1분마다 업데이트
                     drowsy_weight[3] = detector.calculate_blink_count_and_rate()
                     # ----------------------------------------------------------------------------------------
@@ -519,7 +539,6 @@ def main():
             #cv2.putText(flipped_image, sleep_status, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2,cv2.LINE_AA)
             #cv2.putText(flipped_image, ear_text, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2, cv2.LINE_AA)
             cv2.imshow('MediaPipe Face Mesh', flipped_image)
-            print(drowsy)
 
             # 'Esc' 키 입력 시 루프 종료
             if cv2.waitKey(5) & 0xFF == 27:
