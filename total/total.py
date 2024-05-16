@@ -23,7 +23,6 @@ drowy_level = 2
 
 load_dotenv()  # .env 파일에서 환경 변수 불러오기
 
-
 def setup_bluetooth_connection():
     # Bluetooth 서버 설정
     server_socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
@@ -361,7 +360,7 @@ class CO2Sensor:
 
     def co2_check(self):
         global drowsy_weight, co2_level
-        self.ser.setup()
+        self.setup()
         print("Sending")
         self.send_cmd()
         time.sleep(1)
@@ -685,10 +684,25 @@ def eye_aspect_ratio(eye_points):
     H = np.linalg.norm(eye_points[0] - eye_points[3])
     return (V1 + V2) / (2.0 * H)
 
+class TextStatus:
+    def __init__(self):
+        self.co2_status = ""
+        self.drowsy0_status = ""
+        self.drowsy1_status = ""
+        self.drowsy2_status = ""
+        self.drowsy3_status = ""
+
+    def update_status(self, drowsy_weight):
+        self.co2_status = f"co2: {drowsy_weight[0]:.2f}"
+        self.drowsy0_status = f"Yawning: {drowsy_weight[1]:.2f}"
+        self.drowsy1_status = f"Blink Time: {drowsy_weight[2]:.2f}"
+        self.drowsy2_status = f"Blink Rate: {drowsy_weight[3]:.2f}"
+        self.drowsy3_status = f"PERCLOS: {drowsy_weight[4]:.2f}"
 
 # 메인 함수: 카메라 영상 및 얼굴 메쉬 감지 루프
 def drowy_run():
     global drowy_level
+    text_status = TextStatus()
     picam2 = Picamera2()
     picam2.start()
     # MediaPipe 얼굴 메쉬 감지 설정
@@ -764,12 +778,34 @@ def drowy_run():
                 print(drowsy_weight)
                 last_print_time = current_time  # 마지막 출력 시간 업데이트
 
-            # cv2.imshow('MediaPipe Face Mesh', flipped_image)
-            # 큐에 처리된 이미지 추가
+            # drowsy_weight 상태 업데이트
+            text_status.update_status(drowsy_weight)
+
+            # 이미지를 좌우 반전합니다.
             flipped_image = cv2.flip(image, 1)
-            cv2.imshow('MediaPipe Face Mesh', image)
+            # EAR
+            cv2.putText(flipped_image, text_status.co2_status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0),
+                        2,
+                        cv2.LINE_AA)
+            # 졸음 감지 상태 표시
+            # 하품 감지 상태를 좌우 반전된 영상에 표시
+            cv2.putText(flipped_image, text_status.drowsy0_status, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (0, 0, 255), 2,
+                        cv2.LINE_AA)
+            # 눈 지속시간
+            cv2.putText(flipped_image, text_status.drowsy1_status, (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (0, 0, 255), 2,
+                        cv2.LINE_AA)
+            # 분당 눈 깜빡임
+            cv2.putText(flipped_image, text_status.drowsy2_status, (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (255, 0, 0), 2,
+                        cv2.LINE_AA)
+            # perclos
+            cv2.putText(flipped_image, text_status.drowsy3_status, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (0, 0, 255), 2,
+                        cv2.LINE_AA)
 
-
+            cv2.imshow('MediaPipe Face Mesh', flipped_image)
             # 'Esc' 키 입력 시 루프 종료
             if cv2.waitKey(5) & 0xFF == 27:
                 break
