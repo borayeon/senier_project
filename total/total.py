@@ -6,6 +6,297 @@ import threading
 import time
 from picamera2 import Picamera2
 import serial
+from dotenv import load_dotenv
+import os
+import pyaudio
+import speech_recognition as sr
+# import numpy as np
+import wave
+from openai import OpenAI
+# import random
+# import time
+import bluetooth
+import queue
+
+# 전역 변수로 이미지 큐 생성
+image_queue = queue.Queue()
+# 졸음 상태 저장용 배열 (하품, 눈 깜빡임 지속 시간, 분당 눈 깜빡임 횟수, 분당 눈 감은 시간)
+drowsy_weight = [0, 0, 0, 0, 0]  # CO2(가중치) 하품(가중치 : 1 or 0), 눈 깜빡임 지속시간(가중치), 분당 눈 깜빡임 횟수, 분당 눈 감은 시간
+co2_level = 0
+drowy_level = 2
+
+load_dotenv()  # .env 파일에서 환경 변수 불러오기
+
+
+def setup_bluetooth_connection():
+    # Bluetooth 서버 설정
+    server_socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+    server_socket.bind(("", bluetooth.PORT_ANY))
+    server_socket.listen(1)
+
+    print("Bluetooth 연결을 기다리는 중...")
+    client_socket, address = server_socket.accept()
+    print(f"{address} 에 연결되었습니다.")
+
+    # Bluetooth 연결이 완료되면 사용자 정보 수신
+    user_interest = []
+    while True:
+        data = client_socket.recv(1024).decode('utf-8')
+        if data:
+            read_message = data.split("|")
+            if read_message[0] == "0":
+                print(f"유저 정보: {read_message[1]}, {read_message[2]}")
+                user_interest.append(read_message[1])
+                user_interest.append(read_message[2])
+                break
+
+    return client_socket, user_interest
+
+
+class Charvis:
+    def __init__(self):
+        self.system_messages = {
+            "start": """
+            Charvis는 운전자가 깨어 있도록 설계된 대화형 서비스입니다. 간단한 자기 소개로 대화를 시작합니다 아래의 국토교통부 선정 졸음운전 예방 8가지 수칙 중 한 가지를 언급합니다.
+            1. 하루 7~8시간 충분한 수면 취하기
+            2. 충분한 수면 휴식 취했는데도 졸음이 오면 반드시 다른 요인이 있는지 살펴야 한다.
+            3. 차내 이산화탄소 농도가 높아지면 산소부족으로 졸음이 발생하므로 주기적으로 창문을 열어 내부 환기 시키기
+            4. 졸음을 유발하는 성분이 든 약물은 운전할때 가급적 삼가기
+            5. 휴게소나 졸음 쉼터에서 쉬어가기
+            6. 운전하는 날은 졸음을 유발하는 음식물 피하기
+            7. 졸음방지 용품 적극적으로 활용해보기
+            8. 간단한 스트레칭이나 지압해주기
+            """,
+            "level_2": """
+				사용자의 졸음 레벨이 2일 때, 흥미에 대한 질문을 생성합니다, 한국어로만 대화를 생성합니다.
+            """,
+            "level_3": """
+				사용자의 졸음 레벨이 3일 때, 사용자에게 졸음쉼터로 안내해도 되는지 질문을 생성합니다. 해당 질문을 생성한 후에도 졸음쉼터로 안내한 후에도 대화는 계속됩니다.
+            """,
+            "level_4": """
+				사용자의 졸음 레벨이 4일 때, 사용자에게 졸음쉼터로 즉시 안내하겠다는 말을 합니다. 졸음쉼터로 안내한 후에도 대화는 계속됩니다.
+            """,
+            "center_guide": """
+				사용자가 졸음 쉼터로 네비게이션을 조정하는 것을 동의하였거나 인지했다고 판단됨 졸음 쉼터로 네비게이션을 조정한다는 말 생성함. 생성 후에도 흥미에 관한 대화는 지속됨.
+            """,
+            "end": """
+				사용자에게 안전운전 하라는 말과 작별인사를 하고 대화를 종료합니다.
+            """
+        }
+        self.prev_question = None
+        self.conversation_count = 0
+        self.interest = None
+        self.iscenterquestion = 0
+
+    def is_speech(self, data, threshold):
+        return np.max(np.frombuffer(data, dtype=np.int16)) > threshold
+
+    def capture_voice(self):
+        FORMAT = pyaudio.paInt16
+        CHANNELS = 1
+        RATE = 44100
+        CHUNK = 4096
+        SILENCE_THRESHOLD = 3
+        SPEECH_THRESHOLD = 1000
+
+        audio = pyaudio.PyAudio()
+        stream = audio.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+
+        print("음성 인식을 시작합니다. 말씀해주세요.")
+        frames = []
+        silence_counter = 0
+
+        while True:
+            data = stream.read(CHUNK)
+            frames.append(data)
+
+            if self.is_speech(data, SPEECH_THRESHOLD):
+                silence_counter = 0
+            else:
+                silence_counter += 1
+
+            if silence_counter > SILENCE_THRESHOLD * RATE / CHUNK:
+                break
+
+        print("음성 인식이 완료되었습니다.")
+        wf = wave.open("temp.wav", 'wb')
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(audio.get_sample_size(FORMAT))
+        wf.setframerate(RATE)
+        wf.writeframes(b''.join(frames))
+        wf.close()
+
+        r = sr.Recognizer()
+        with sr.AudioFile("temp.wav") as source:
+            audio_data = r.record(source)
+            try:
+                text = r.recognize_google(audio_data, language='ko-KR')
+                print(f"인식된 텍스트: {text}")
+                return text
+            except sr.UnknownValueError:
+                print("음성을 인식할 수 없습니다.")
+                return None
+            except sr.RequestError as e:
+                print(f"STT 서비스에 접근할 수 없습니다. 오류: {e}")
+                return None
+            finally:
+                stream.stop_stream()
+                stream.close()
+                audio.terminate()
+
+    def create_prompt(self, sleep_level, co2_level, user_interest, user_voice=None):
+        self.interest = user_interest
+        prompt = f"졸음 레벨: {sleep_level}, CO2 레벨: {co2_level}, 흥미: {self.interest}, 대화 횟수: {self.conversation_count}"
+        if user_voice:
+            prompt += f", 사용자 음성 입력: '{user_voice}'"
+        else:
+            prompt += ", 사용자 음성 입력: None"
+
+        if self.prev_question:
+            prompt += f"\n이전 질문: {self.prev_question}\n이전 답변: {user_voice}"
+
+        return prompt
+
+    def create_role(self, sleep_level, user_voice=None):
+        if int(sleep_level) >= 2:
+            if user_voice:
+                role = "사용자가 응답했습니다."
+            else:
+                role = "사용자의 졸음 레벨이 높게 감지되었습니다."
+        else:
+            role = "사용자가 응답했습니다."
+        return role
+
+    def call_gpt_api(self, prompt, system_message):
+        client = OpenAI()
+        OpenAI.api_key = os.getenv("OPENAI_API_KEY")
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.05,
+        )
+
+        generated_text = response.choices[0].message.content
+        return generated_text
+
+    def extract_flags(self, user_voice):
+        center_flag = 0
+        if self.iscenterquestion == 1:
+            positive_answers = ["응", "어", "안내", "그래", "좋아", "알겠어", "안내", "해", "줘"]
+            if user_voice is not None:
+                for answer in positive_answers:
+                    if answer in user_voice:
+                        center_flag = 1
+                        break
+        return center_flag
+
+    def generate_prompt(self, sleep_level, co2_level, user_interest, user_voice):
+        if self.conversation_count == 0:
+            system_message = self.system_messages["start"]
+            prompt = self.create_prompt(sleep_level, co2_level, user_interest, user_voice)
+        elif int(sleep_level) == 2:
+            system_message = self.system_messages["level_2"]
+            prompt = self.create_prompt(sleep_level, co2_level, user_interest, user_voice)
+        elif int(sleep_level) == 3:
+            system_message = self.system_messages["level_3"]
+            prompt = self.create_prompt(sleep_level, co2_level, user_interest, user_voice)
+        elif int(sleep_level) == 4:
+            system_message = self.system_messages["level_4"]
+            prompt = self.create_prompt(sleep_level, co2_level, user_interest, user_voice)
+        return system_message, prompt
+
+    def determine_center_flag(self, sleep_level, user_voice):
+        if int(sleep_level) == 3:
+            center_flag = self.extract_flags(user_voice)
+        else:
+            center_flag = 0
+        return center_flag
+
+    def send_response(self, prompt, sleep_level, center_flag, generated_response, mThreadConnectedBluetooth):
+        print(f"\n전송된 프롬프트: {prompt}\n")
+        generated_question = generated_response.split('{')[0].strip()
+        generated_question = f"{sleep_level}|{center_flag}|{generated_question}"
+        print(f"GPT API가 생성한 응답: {generated_question}\n")
+        mThreadConnectedBluetooth.send(generated_question.encode('utf-8'))
+
+    def get_levels(self):
+        global co2_level, drowy_level
+        sleep_level = str(drowy_level)
+        co2_level_ = str(co2_level)
+        return sleep_level, co2_level_
+
+    def wait_for_user_input(self, mThreadConnectedBluetooth):
+        print("안드로이드에서 시간 값을 기다리는 중...")
+        while True:
+            try:
+                t = mThreadConnectedBluetooth.recv(1024).decode('utf-8')
+                break
+            except:
+                pass
+        print(f"받아온 대기 시간: {t}초")
+        time.sleep(int(t))
+        user_voice = self.capture_voice()
+        return user_voice
+
+    def run(self, client_socket, user_interest):
+        while True:
+            sleep_level, co2_level = self.get_levels()
+            if int(sleep_level) <= 1:
+                print("졸음 레벨이 1 이하입니다. 10초 후에 다시 확인합니다.")
+                time.sleep(10)
+                continue
+
+            while int(sleep_level) >= 2:
+                if self.conversation_count == 0:
+                    user_voice = None
+                else:
+                    user_voice = self.wait_for_user_input(client_socket)
+
+                system_message, prompt = self.generate_prompt(sleep_level, co2_level, user_interest[1], user_voice)
+                center_flag = self.determine_center_flag(sleep_level, user_voice)
+                if (int(sleep_level) == 3 and self.iscenterquestion == 0):
+                    system_message = self.system_messages["level_3"]
+                    prompt = self.create_prompt(sleep_level, co2_level, user_interest[1], user_voice)
+                    self.iscenterquestion = 1
+
+                if (self.iscenterquestion == 1 and center_flag == 1 and int(sleep_level) == 3):
+                    system_message = self.system_messages["center_guide"]
+                    prompt = self.create_prompt(sleep_level, co2_level, user_interest[1], user_voice)
+                    self.iscenterquestion = 0
+
+                generated_response = self.call_gpt_api(prompt, system_message)
+                self.send_response(prompt, sleep_level, center_flag, generated_response, client_socket)
+
+                self.prev_question = generated_response.split('{')[0].strip()
+                self.conversation_count += 1
+
+                sleep_level, co2_level = self.get_levels()
+
+                # sleep_level이 2 이상이다가, 1로 떨어질 경우, 안전운전하라는 말과 함께 대화를 종료함
+                if int(sleep_level) <= 1:
+                    print("안드로이드에서 시간 값을 기다리는 중...")
+                    while True:
+                        try:
+                            t = client_socket.recv(1024).decode('utf-8')
+                            break
+                        except:
+                            pass
+                    print(f"받아온 대기 시간: {t}초")
+                    time.sleep(int(t))
+                    system_message = self.system_messages["end"]
+                    prompt = self.create_prompt(sleep_level, co2_level, user_interest[1], None)
+                    center_flag = self.determine_center_flag(sleep_level, user_voice)
+                    generated_response = self.call_gpt_api(prompt, system_message)
+                    self.send_response(prompt, sleep_level, center_flag, generated_response, client_socket)
+                    print("졸음 레벨이 1 이하로 떨어졌습니다. 10초 후에 다시 확인합니다.")
+                    time.sleep(10)
+                    break
 
 
 # 0 : 좋음, 1 : 평범, 2 : 주의, 3 : 피로유발, 4 : 위험 - 태경
@@ -16,6 +307,7 @@ class CO2Sensor:
         self.level = 0  # 레벨 유지
         self.pre_level = 0
         self.weight = 0
+
     # 초기화 작업
     def setup(self):
         self.ser.flushInput()
@@ -57,22 +349,22 @@ class CO2Sensor:
         if self.level == 0:
             # 0단계
             self.level = 0
-            return 0  
+            return 0
         elif self.level == 1:
             # 1단계
-            return 0.3  
+            return 0.3
         elif self.level == 2:
             # 2단계
-            return 0.5  
+            return 0.5
         elif self.level == 3:
             # 3단계
-            return 0.8 
+            return 0.8
         elif self.level <= 4:
             # 4단계
             return 1.0
 
     def co2_check(self):
-        global drowsy_weight
+        global drowsy_weight, co2_level
         self.ser.setup()
         print("Sending")
         self.send_cmd()
@@ -93,30 +385,23 @@ class CO2Sensor:
             # 이전 레벨 < 현재 ppm -> 이전레벨 + 1
             if self.pre_level < self.level:
                 self.level = self.pre_level + 1
-            # 이전 레벨 > 현재 ppm -> 현재 ppm
-            #elif self.pre_level > self.level:
-            #    pass
-                #self.level = self.level
-            # 이전 레벨 == 현재 ppm -> 이전 레벨
-            #elif self.pre_level == self.level:
-            #    pass
-                #self.level = self.pre_level
             # 가중치 반환
             self.weight = self.co2_weight()
-            #print("PPM:", PPM_Value, "가중치:", self.weight)
             # 이전 레벨 저장
             self.pre_level = self.level
-            drowsy_weight[0] = [self.level, self.weight]
+            co2_level, drowsy_weight[0] = self.level, self.weight
         else:
-            #print("CHECKSUM Error 이전 레벨로 입력됩니다.")
-            drowsy_weight[0] = [self.level, self.weight]
+            # print("CHECKSUM Error 이전 레벨로 입력됩니다.")
+            co2_level, drowsy_weight[0] = self.level, self.weight
 
     # CO2 상태를 지속적으로 확인하는 루프
     def run(self):
-        time.sleep(900) # 15분 뒤부터 코드 동작
+        self.co2_check()
+        time.sleep(900)  # 15분 뒤부터 코드 동작
         while True:
             self.co2_check()
-            time.sleep(600) # 10분마다 코드 동작
+            time.sleep(600)  # 10분마다 코드 동작
+
 
 # Serial port settings
 ser = serial.Serial('/dev/ttyAMA4', baudrate=9600, timeout=1)
@@ -134,15 +419,10 @@ MOUTH_INDICES = [13, 14]
 BLINK_RESET_TIME = 60
 EAR_THRESHOLD = 0.15  # 눈 깜빡임 기준값
 YAWN_THRESHOLD = 20  # 하품 감지 기준값
-# 초기 프레임 수
-INITIAL_EYE_FRAME_THRESHOLD = 9
-INITIAL_MOUTH_FRAME_THRESHOLD = 15
-FRAME_RATE = 15  # FPS 기준값
-# 졸음 상태 저장용 배열 (하품, 눈 깜빡임 지속 시간, 분당 눈 깜빡임 횟수, 분당 눈 감은 시간)
-drowsy_weight = [None, None, None, None, None]  # CO2(가중치) 하품(가중치 : 1 or 0), 눈 깜빡임 지속시간(가중치), 분당 눈 깜빡임 횟수, 분당 눈 감은 시간
-#previous_state = drowsy_weight.copy()
+
 # 시리얼 통신을 통한 데이터 수신
 received_int = None
+
 
 def serial_read():
     global received_int
@@ -153,13 +433,6 @@ def serial_read():
             received_int = int.from_bytes(data, byteorder='big')
             print("Received:", received_int)
 
-# 시리얼 데이터 수신 스레드 시작
-thread = threading.Thread(target=serial_read)
-thread2 = threading.Thread(target=sensor.run)
-thread.daemon = True
-thread2.daemon = True
-thread.start()
-thread2.start()
 
 class DrowsinessDetector:
     def __init__(self):
@@ -170,8 +443,6 @@ class DrowsinessDetector:
         self.closing_durations = []
         self.eye_frame_count = 0
         self.mouth_frame_count = 0
-        self.eye_frame_threshold = INITIAL_EYE_FRAME_THRESHOLD
-        self.mouth_frame_threshold = INITIAL_MOUTH_FRAME_THRESHOLD
         self.last_blink_timestamp = 0
         self.blinks_per_minute = []
         self.closed_eye_time = 0
@@ -189,7 +460,8 @@ class DrowsinessDetector:
         # 횟수
         self.weight_blink_count = 0
         # 퍼클로스
-        self.weight_perclos= 0
+        self.weight_perclos = 0
+
     ## 하품 - 태경
     def detect_yawning(self, face_landmarks, image_shape):
         # 입 크기 계산
@@ -218,8 +490,10 @@ class DrowsinessDetector:
             # 하품이 감지되지 않으면 시작 시간과 지속 시간 리셋
             self.yawn_start_time = 0
             self.yawn_duration = 0
+            return self.weight_yawming
 
         return self.weight_yawming
+
     # 하품 가중치
     def yawning_update_stage(self):
         current_time = time.time()  # 실시간
@@ -303,7 +577,6 @@ class DrowsinessDetector:
             base_weight = 0.3
         elif drowsy_count >= 3:
             base_weight = 0.6
-
         # 횟수에 따른 추가 가중치 설정
         if drowsy_count < 3:
             additional_weight = 0
@@ -360,6 +633,8 @@ class DrowsinessDetector:
             elif total_blinks >= 3:
                 self.weight_blink_count = 1.0
                 return self.weight_blink_count
+        return self.weight_blink_count
+
     # 눈 깜빡임 상태를 업데이트하는 함수 - 태경
     def update_eye_closure(self, ear):
         current_time = time.time()
@@ -390,65 +665,22 @@ class DrowsinessDetector:
                 self.weight_perclos = 0.6
             elif perclos < 40:
                 self.weight_perclos = 1.0
-            elif perclos < 50:
+            elif perclos >= 40:
                 self.weight_perclos = 2.0
         return self.weight_perclos  # 60초가 지나지 않았다면 이전 상태 반환
 
-    # # 눈 깜빡임 횟수를 확인하는 함수
-    # def check_blink(self, ear):
-    #     current_time = time.time()
-    #     # EAR 값이 임계값보다 작고 마지막 깜빡임 타임스탬프가 없을 때 깜빡임 시작
-    #     if ear < EAR_THRESHOLD and self.last_blink_timestamp == 0:
-    #         self.last_blink_timestamp = current_time
-    #     # EAR 값이 임계값 이상이고 마지막 깜빡임 타임스탬프가 있을 때 깜빡임 종료
-    #     elif ear >= EAR_THRESHOLD and self.last_blink_timestamp != 0:
-    #         self.blink_count += 1
-    #         self.last_blink_timestamp = 0
-    #
-    #     # 1분마다 깜빡임 횟수를 초기화하고 갱신
-    #     if current_time - self.start_time > BLINK_RESET_TIME:
-    #         self.blinks_per_minute = self.blink_count
-    #         self.blink_count = 0
-    #         self.start_time = current_time
-    #     return self.blinks_per_minute
-
-    # 사용하지 않는? 코드
-    # # 동재
-    # # 동적으로 임계값을 조정하는 함수
-    # def update_thresholds(self, elapsed_time):
-    #     # Dynamically adjust thresholds based on elapsed time
-    #     self.eye_frame_threshold = max(INITIAL_EYE_FRAME_THRESHOLD - int(elapsed_time / 3600 * 3.5), 2)
-    #     self.mouth_frame_threshold = max(INITIAL_MOUTH_FRAME_THRESHOLD - int(elapsed_time / 3600 * 2.5), 10)
-    #
-    # # 졸음 여부를 확인하는 함수
-    # def check_drowsiness(self, ear, mor):
-    #     # 경과 시간에 따라 임계값 업데이트
-    #     elapsed_time = time.time() - self.start_time
-    #     self.update_thresholds(elapsed_time)
-    #     # EAR 값에 따라 눈의 상태 카운트 증가 또는 초기화
-    #     if ear < EAR_THRESHOLD:
-    #         self.eye_frame_count += 1
-    #     else:
-    #         self.eye_frame_count = 0
-    #     # 입 크기(mor)에 따라 입 상태 카운트 증가 또는 초기화
-    #     if mor > YAWN_THRESHOLD:
-    #         self.mouth_frame_count += 1
-    #     else:
-    #         self.mouth_frame_count = 0
-    #
-    #     # 눈과 입 카운트가 임계값을 초과하는지 확인하여 졸음 여부 반환
-    #     if self.eye_frame_count >= self.eye_frame_threshold or self.mouth_frame_count >= self.mouth_frame_threshold:
-    #         return True
-    #     return False
 
 # 졸음 감지기 인스턴스 생성 - 기본
 detector = DrowsinessDetector()
+# 차비스 생성
+charvis = Charvis()
 
 
 # 얼굴 랜드마크의 좌표를 반환하는 함수 - 기본
 def get_landmark_point(face_landmarks, landmark_index, image_shape):
     return np.array([face_landmarks.landmark[landmark_index].x, face_landmarks.landmark[landmark_index].y]) * [
         image_shape[1], image_shape[0]]
+
 
 # 눈의 EAR를 계산하는 함수 - 태경
 def eye_aspect_ratio(eye_points):
@@ -457,33 +689,15 @@ def eye_aspect_ratio(eye_points):
     H = np.linalg.norm(eye_points[0] - eye_points[3])
     return (V1 + V2) / (2.0 * H)
 
-# 입간격 확인 함수 및 얼굴 높이 추정 함수
-# 입 간격을 계산하는 함수 - 태경
-# def calculate_lip_distance(face_landmarks, image_shape):
-#     upper_lip_point = np.array(
-#         [face_landmarks.landmark[MOUTH_INDICES[0]].x, face_landmarks.landmark[MOUTH_INDICES[0]].y]) * [image_shape[1],
-#                                                                                                        image_shape[0]]
-#     lower_lip_point = np.array(
-#         [face_landmarks.landmark[MOUTH_INDICES[1]].x, face_landmarks.landmark[MOUTH_INDICES[1]].y]) * [image_shape[1],
-#                                                                                                        image_shape[0]]
-#     return np.linalg.norm(upper_lip_point - lower_lip_point)
-
-
-# 얼굴 높이를 추정하여 함수 - 태경
-# def estimate_face_height(face_landmarks, image_shape):
-#     forehead_center = get_landmark_point(face_landmarks, 10, image_shape)
-#     chin_bottom = get_landmark_point(face_landmarks, 152, image_shape)
-#     return np.linalg.norm(forehead_center - chin_bottom)
 
 # 메인 함수: 카메라 영상 및 얼굴 메쉬 감지 루프
-
-# 메인 함수: 카메라 영상 및 얼굴 메쉬 감지 루프
-def main():
+def drowy_run():
+    global drowy_level
     picam2 = Picamera2()
     picam2.start()
-    time.sleep(2.0)
-    print(drowsy_weight)
     # MediaPipe 얼굴 메쉬 감지 설정
+    last_print_time = time.time()  # 마지막으로 drowy_level을 출력한 시간을 저장
+
     with mp_face_mesh.FaceMesh(
             max_num_faces=1,
             refine_landmarks=True,
@@ -504,23 +718,28 @@ def main():
                 for face_landmarks in results.multi_face_landmarks:
                     # ----------------------------------------------------------------------------------------
                     # 하품
+                    # print(drowsy_weight[0])
                     # 입 크기 계산 - 실시간 업데이트
                     drowsy_weight[1] = detector.detect_yawning(face_landmarks, image.shape)
+                    # print(drowsy_weight[1])
                     # ----------------------------------------------------------------------------------------
                     # 눈 깜빡임 지속시간 - 실시간 업데이트
                     # ear 계산
                     ear = detector.EAR_calculation(face_landmarks, image.shape)
                     # 눈 깜빡임 시 눈 감김 지속 시간이 500ms을 넘으면 상태 True로 변환
                     drowsy_weight[2] = detector.calculate_eye_closing_time(ear)
+                    # print(drowsy_weight[2])
                     # ----------------------------------------------------------------------------------------
                     # 눈 깜박임 분당 빈도수 - 1분마다 업데이트
                     drowsy_weight[3] = detector.calculate_blink_count_and_rate()
+                    # print(drowsy_weight[3])
                     # ----------------------------------------------------------------------------------------
                     # perclos
                     # 눈 상태 업데이트
                     detector.update_eye_closure(ear)  # 현재 EAR 값과 현재 시간 전달
                     # 1분마다 업데이트
                     drowsy_weight[4] = detector.calculate_perclos()
+                    # print(drowsy_weight[4])
                     # ----------------------------------------------------------------------------------------
                     mp_drawing.draw_landmarks(
                         image=image,
@@ -529,25 +748,65 @@ def main():
                         landmark_drawing_spec=None,
                         connection_drawing_spec=mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=1, circle_radius=1)
                     )
-            # cv 출력용
-            # 기본 상태 초기화
-            #yawn_status = ""
-            #sleep_status = ""
-            #ear_text = ""
-            flipped_image = cv2.flip(image, 1)
-            #cv2.putText(flipped_image, yawn_status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2,cv2.LINE_AA)
-            #cv2.putText(flipped_image, sleep_status, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2,cv2.LINE_AA)
-            #cv2.putText(flipped_image, ear_text, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2, cv2.LINE_AA)
-            cv2.imshow('MediaPipe Face Mesh', flipped_image)
+            total_weight = sum(drowsy_weight)
+            # 1단계, 2단계, 3단계, 4단계
+            weight_ranges = [1.25, 2.50, 3.75, 5.00]
 
+            if total_weight < weight_ranges[0]:
+                drowy_level = 1
+            elif total_weight < weight_ranges[1]:
+                drowy_level = 2
+            elif total_weight < weight_ranges[2]:
+                drowy_level = 3
+            elif total_weight >= weight_ranges[2]:
+                drowy_level = 4
+
+            # 여기에 drowy_level을 주기적으로 출력하는 코드를 추가
+            current_time = time.time()
+            if current_time - last_print_time >= 1:
+                print(f"\nDrowsy Level: {drowy_level}, co2_level: {co2_level}")
+                print(drowsy_weight)
+                last_print_time = current_time  # 마지막 출력 시간 업데이트
+
+            flipped_image = cv2.flip(image, 1)
+            # cv2.imshow('MediaPipe Face Mesh', flipped_image)
+            # 큐에 처리된 이미지 추가
+            flipped_image = cv2.flip(image, 1)
+            image_queue.put(flipped_image)
             # 'Esc' 키 입력 시 루프 종료
             if cv2.waitKey(5) & 0xFF == 27:
                 break
 
-    # 센서 및 카메라 종료
-    sensor.ser.close()
-    ser.close()
     picam2.stop()
+    cv2.destroyAllWindows()
+
+
+def main():
+    # 신뢰할 수 있는 mac주소 연결?
+    # client_socket, user_interest = setup_bluetooth_connection()  # 블루투스 연결 대기
+    # 와이파이 연결
+
+    # 시리얼 데이터 수신 스레드 시작
+    # thread = threading.Thread(target=serial_read)
+    # thread2 = threading.Thread(target=sensor.run)
+    thread_1 = threading.Thread(target=drowy_run)
+    # thread_2 = threading.Thread(target=charvis.run, args=(client_socket,user_interest))
+    thread_1.daemon = True
+    # time.sleep(3)
+    # thread_2.daemon = True
+    # thread.daemon = True
+    # thread2.daemon = True
+    # thread.start()
+    # thread2.start()
+    thread_1.start()
+    # thread_2.start()
+    while True:
+        if not image_queue.empty():
+            image = image_queue.get()
+            cv2.imshow('MediaPipe Face Mesh', image)
+
+        if cv2.waitKey(5) & 0xFF == 27:
+            break
     cv2.destroyAllWindows()
 
 # 메인 함수 실행
