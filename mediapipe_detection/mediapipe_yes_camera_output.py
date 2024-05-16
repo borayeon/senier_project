@@ -228,7 +228,6 @@ with mp_face_mesh.FaceMesh(
         success, image = cap.read()
         if not success:
             break
-# 3
         # 성능 최적화를 위해 이미지 쓰기를 비활성화합니다.
         image.flags.writeable = False
         # OpenCV의 BGR 이미지를 RGB로 변환합니다.
@@ -246,7 +245,6 @@ with mp_face_mesh.FaceMesh(
                 # # 하품
                 # # 입 크기 계산 - 실시간 업데이트
                 _ = detector.detect_yawning(face_landmarks, image.shape)
-
 #----------------------------------------------------------------------------------------
                 # 눈 깜빡임 지속시간 - 실시간 업데이트
                 # ear 계산
