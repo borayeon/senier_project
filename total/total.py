@@ -16,10 +16,6 @@ from openai import OpenAI
 # import random
 # import time
 import bluetooth
-import queue
-
-# 전역 변수로 이미지 큐 생성
-image_queue = queue.Queue()
 # 졸음 상태 저장용 배열 (하품, 눈 깜빡임 지속 시간, 분당 눈 깜빡임 횟수, 분당 눈 감은 시간)
 drowsy_weight = [0, 0, 0, 0, 0]  # CO2(가중치) 하품(가중치 : 1 or 0), 눈 깜빡임 지속시간(가중치), 분당 눈 깜빡임 횟수, 분당 눈 감은 시간
 co2_level = 0
@@ -768,11 +764,12 @@ def drowy_run():
                 print(drowsy_weight)
                 last_print_time = current_time  # 마지막 출력 시간 업데이트
 
-            flipped_image = cv2.flip(image, 1)
             # cv2.imshow('MediaPipe Face Mesh', flipped_image)
             # 큐에 처리된 이미지 추가
             flipped_image = cv2.flip(image, 1)
-            image_queue.put(flipped_image)
+            cv2.imshow('MediaPipe Face Mesh', image)
+
+
             # 'Esc' 키 입력 시 루프 종료
             if cv2.waitKey(5) & 0xFF == 27:
                 break
@@ -782,29 +779,22 @@ def drowy_run():
 
 
 def main():
+
     # 신뢰할 수 있는 mac주소 연결?
-    # client_socket, user_interest = setup_bluetooth_connection()  # 블루투스 연결 대기
+    client_socket, user_interest = setup_bluetooth_connection()  # 블루투스 연결 대기
     # 와이파이 연결
-
+    thread = threading.Thread(target=serial_read)
+    thread2 = threading.Thread(target=sensor.run)
+    thread3 = threading.Thread(target=charvis.run, args=(client_socket, user_interest))
+    thread.daemon = True
+    thread2.daemon = True
+    thread3.daemon = True
+    thread.start()
+    thread2.start()
+    thread3.start()
     # 시리얼 데이터 수신 스레드 시작
-    # thread = threading.Thread(target=serial_read)
-    # thread2 = threading.Thread(target=sensor.run)
-    thread_1 = threading.Thread(target=drowy_run)
-    # thread_2 = threading.Thread(target=charvis.run, args=(client_socket,user_interest))
-    thread_1.daemon = True
-    # time.sleep(3)
-    # thread_2.daemon = True
-    # thread.daemon = True
-    # thread2.daemon = True
-    # thread.start()
-    # thread2.start()
-    thread_1.start()
-    # thread_2.start()
     while True:
-        if not image_queue.empty():
-            image = image_queue.get()
-            cv2.imshow('MediaPipe Face Mesh', image)
-
+        drowy_run()
         if cv2.waitKey(5) & 0xFF == 27:
             break
     cv2.destroyAllWindows()
